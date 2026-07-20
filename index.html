@@ -512,6 +512,13 @@
   .voice-key .vk-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--gray-500); white-space: nowrap; }
   .voice-key .vk-item { font-size: 0.84rem; color: var(--gray-600); }
   .voice-key .vk-item code { background: #fff; border: 1px solid var(--gray-200); border-radius: 6px; padding: 2px 7px; font-size: 0.8rem; color: var(--blue); font-weight: 700; }
+  /* Click-to-dictate insertion marker */
+  .ta-wrap { position: relative; margin-bottom: 14px; }
+  .ta-wrap .dictate-textarea { margin-bottom: 0; display: block; }
+  .caret-mirror { position: absolute; top: 0; left: 0; visibility: hidden; overflow: hidden; white-space: pre-wrap; word-wrap: break-word; pointer-events: none; }
+  .caret-marker { position: absolute; width: 2.5px; border-radius: 2px; background: var(--blue); pointer-events: none; display: none; }
+  .caret-marker.rec { background: var(--red); }
+  .narrative-ta { font-size: 0.92rem; line-height: 1.8; }
   .dictate-unsupported { background: #fff7ed; border: 1.5px solid #fdba74; color: #9a3412; border-radius: 9px; padding: 12px 14px; font-size: 0.85rem; margin-bottom: 16px; line-height: 1.5; }
 </style>
 </head>
@@ -2245,10 +2252,8 @@ function collectStep(idx) {
 }
 
 function goToStep(idx) {
-  if (state.view === 'dictate') {
+  if (state.view === 'dictate' || state.view === 'review' || state.view === 'narrative') {
     stopDictation();
-    state.view = 'steps';
-  } else if (state.view === 'review' || state.view === 'narrative') {
     state.view = 'steps';
   } else {
     state.data[STEPS[state.current].id] = collectStep(state.current);
@@ -2326,6 +2331,8 @@ function skipStep(idx) {
 // ── Review ───────────────────────────────────────────────────
 
 function renderReview() {
+  stopDictation();
+  state.view = 'review';
   renderProgressBar();
   const sections = STEPS.map((step, si) => {
     const isSkipped = state.skipped[step.id];
@@ -2860,16 +2867,21 @@ function generateNarrative() {
 function renderNarrative(narrative) {
   state.view = 'narrative';
   renderProgressBar();
-  const html = narrative.split('\n\n').map(p => `<p>${p}</p>`).join('');
+  const supported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
   document.getElementById('stepContainer').innerHTML = `
     <div class="card">
       <div class="card-header">
         <div class="step-icon" style="background:var(--green-pale);color:var(--green)">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
         </div>
-        <div><h2>Generated Narrative</h2><p>Copy this text directly into your report system.</p></div>
+        <div><h2>Generated Narrative</h2><p>Fully editable &mdash; click anywhere in the text to type or dictate from that spot, then copy it into your report system.</p></div>
       </div>
-      <div class="narrative-box" id="narrativeText">${html}</div>
+      ${supported ? _micBarHtml() : ''}
+      <div class="ta-wrap">
+        <textarea id="narrativeText" class="dictate-textarea narrative-ta" spellcheck="false"></textarea>
+        <div class="caret-mirror" id="narrativeMirror" aria-hidden="true"></div>
+        <div class="caret-marker" id="narrativeMarker"></div>
+      </div>
       <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
         <button class="btn btn-primary" onclick="copyNarrative()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -2902,11 +2914,17 @@ function renderNarrative(narrative) {
         </div>`).join('')}
       </div>
     </div>`;
+  const ta = document.getElementById('narrativeText');
+  ta.value = narrative;
+  // Size the box to its content (within sane bounds) so the whole narrative is visible
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(Math.max(ta.scrollHeight + 6, 260), 640) + 'px';
+  attachDictationSurface('narrativeText', 'narrativeMarker', 'narrativeMirror');
 }
 
 function copyNarrative() {
   const el = document.getElementById('narrativeText');
-  const text = el ? el.innerText : '';
+  const text = el ? (el.value !== undefined ? el.value : el.innerText) : '';
   const notice = document.getElementById('copyNotice');
   const show = () => { notice.classList.add('show'); setTimeout(() => notice.classList.remove('show'), 2500); };
   navigator.clipboard.writeText(text).then(show).catch(() => {
@@ -2918,14 +2936,129 @@ function copyNarrative() {
 
 function startOver() {
   if (!confirm('Start a new PCR? All current data will be cleared.')) return;
+  stopDictation();
   state = { current: 0, data: {}, skipped: {}, view: 'steps' };
   renderProgressBar(); renderStep(0);
 }
 
-// ── Blank Narrative Dictation ─────────────────────────────────
+// ── Dictation engine (shared: blank-narrative view + generated-narrative view) ──
 // Uses the browser's built-in Web Speech API (SpeechRecognition).
 // No API key, no backend — free, runs in the browser. Chrome/Edge/Safari.
-let _dictRecog = null, _dictListening = false, _dictFinal = '';
+// Insert-at-cursor model: click anywhere in the textarea to move the
+// insertion point; a solid marker line shows where dictation lands.
+let _dictRecog = null, _dictListening = false;
+let _dictTa = null, _dictMarker = null, _dictMirror = null;
+let _dictBase = '', _dictPos = 0, _dictInterim = '';
+
+function attachDictationSurface(taId, markerId, mirrorId) {
+  _dictTa = document.getElementById(taId);
+  _dictMarker = document.getElementById(markerId);
+  _dictMirror = document.getElementById(mirrorId);
+  _dictBase = _dictTa.value;
+  _dictPos = _dictBase.length;
+  _dictInterim = '';
+  ['click', 'keyup', 'select', 'focus'].forEach(ev => _dictTa.addEventListener(ev, _syncPosFromSelection));
+  _dictTa.addEventListener('input', _onSurfaceInput);
+  _dictTa.addEventListener('scroll', () => _updateCaretMarker());
+  if (!window.__dictResizeHooked) {
+    window.__dictResizeHooked = true;
+    window.addEventListener('resize', () => _updateCaretMarker());
+  }
+  _updateCaretMarker();
+}
+
+function _syncPosFromSelection() {
+  if (!_dictTa) return;
+  let idx = _dictTa.selectionStart != null ? _dictTa.selectionStart : _dictBase.length;
+  if (_dictListening && _dictInterim) {
+    // Displayed value = base[0..pos] + interim + base[pos..] — map back to base offsets
+    if (idx > _dictPos + _dictInterim.length) idx -= _dictInterim.length;
+    else if (idx > _dictPos) idx = _dictPos;
+  } else {
+    _dictBase = _dictTa.value; // keep base fresh while idle
+  }
+  _dictPos = Math.min(idx, _dictBase.length);
+  _updateCaretMarker();
+}
+
+function _onSurfaceInput() {
+  if (!_dictTa) return;
+  // User typed/edited directly — accept the visible text as the new base
+  _dictInterim = '';
+  _dictBase = _dictTa.value;
+  _dictPos = Math.min(_dictTa.selectionStart != null ? _dictTa.selectionStart : _dictBase.length, _dictBase.length);
+  _updateCaretMarker();
+}
+
+function _commitDictation(raw) {
+  // Trim spaces/tabs but never newlines ("next line" arrives as "\n")
+  const chunk = raw.replace(/^[ \t]+|[ \t]+$/g, '');
+  if (!chunk) return;
+  let before = _dictBase.slice(0, _dictPos);
+  let after = _dictBase.slice(_dictPos);
+  if (/^\n/.test(chunk)) before = before.replace(/[ \t]+$/, '');
+  if (/\n$/.test(chunk)) after = after.replace(/^[ \t]+/, '');
+  let lead = '', trail = '';
+  const prevCh = before.slice(-1), nextCh = after.charAt(0);
+  if (prevCh && prevCh !== '\n' && prevCh !== ' ' && !/^\n/.test(chunk)) lead = ' ';
+  if (!/\n$/.test(chunk)) {
+    if (!nextCh) trail = ' ';
+    else if (nextCh !== ' ' && nextCh !== '\n') trail = ' ';
+  }
+  const ins = lead + chunk + trail;
+  _dictBase = before + ins + after;
+  _dictPos = before.length + ins.length;
+}
+
+function _renderDictation() {
+  if (!_dictTa) return;
+  _dictTa.value = _dictBase.slice(0, _dictPos) + _dictInterim + _dictBase.slice(_dictPos);
+  const caretIdx = _dictPos + _dictInterim.length;
+  if (document.activeElement === _dictTa) {
+    try { _dictTa.setSelectionRange(caretIdx, caretIdx); } catch (_) {}
+  }
+  const rawTop = _updateCaretMarker();
+  if (rawTop != null) {
+    const lh = _markerLineHeight();
+    if (rawTop < _dictTa.scrollTop || rawTop > _dictTa.scrollTop + _dictTa.clientHeight - lh) {
+      _dictTa.scrollTop = Math.max(0, rawTop - _dictTa.clientHeight / 2);
+      _updateCaretMarker();
+    }
+  }
+}
+
+function _markerLineHeight() {
+  if (!_dictTa) return 20;
+  const cs = getComputedStyle(_dictTa);
+  return parseFloat(cs.lineHeight) || (parseFloat(cs.fontSize) * 1.5) || 20;
+}
+
+// Mirror-div technique: returns the caret's raw top offset inside the
+// textarea's scrollable content (or null if the surface isn't attached).
+function _updateCaretMarker() {
+  if (!_dictTa || !_dictMarker || !_dictMirror || !document.body.contains(_dictTa)) return null;
+  const cs = getComputedStyle(_dictTa);
+  ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing',
+   'paddingTop', 'paddingRight', 'paddingBottom', 'paddingLeft', 'textTransform', 'wordSpacing'].forEach(p => { _dictMirror.style[p] = cs[p]; });
+  _dictMirror.style.boxSizing = 'border-box';
+  _dictMirror.style.width = _dictTa.clientWidth + 'px';
+  const caretIdx = Math.min(_dictPos + (_dictInterim ? _dictInterim.length : 0), _dictTa.value.length);
+  _dictMirror.textContent = _dictTa.value.slice(0, caretIdx);
+  const probe = document.createElement('span');
+  probe.textContent = '​';
+  _dictMirror.appendChild(probe);
+  const bTop = parseFloat(cs.borderTopWidth) || 0, bLeft = parseFloat(cs.borderLeftWidth) || 0;
+  const rawTop = probe.offsetTop;
+  const top = rawTop - _dictTa.scrollTop + bTop;
+  const left = probe.offsetLeft + bLeft;
+  const lh = _markerLineHeight();
+  _dictMarker.style.top = top + 'px';
+  _dictMarker.style.left = left + 'px';
+  _dictMarker.style.height = lh + 'px';
+  const visible = top >= 0 && top + lh <= _dictTa.clientHeight + bTop + 6;
+  _dictMarker.style.display = visible ? 'block' : 'none';
+  return rawTop;
+}
 
 function openDictation() {
   stopDictation();
@@ -2944,23 +3077,15 @@ function openDictation() {
         </div>
         <div><h2>Blank Narrative — Dictation</h2><p>Tap the mic and talk, or type directly. Then copy it into your report.</p></div>
       </div>
-      ${supported ? `
-      <div class="mic-bar">
-        <button type="button" id="micBtn" class="mic-btn" onclick="toggleDictation()">
-          <span class="mic-pulse"></span>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
-          <span id="micLabel">Start dictating</span>
-        </button>
-        <span class="mic-status" id="micStatus"></span>
-      </div>
-      <div class="voice-key">
-        <span class="vk-title">Voice commands</span>
-        <span class="vk-item"><code>&ldquo;next line&rdquo;</code> &mdash; presses Enter (say it twice for a blank line)</span>
-      </div>` : `
+      ${supported ? _micBarHtml() : `
       <div class="dictate-unsupported">
         🎤 Voice dictation isn't supported in this browser. Try <strong>Chrome, Edge, or Safari</strong> — or just type your narrative below.
       </div>`}
-      <textarea id="dictateText" class="dictate-textarea" placeholder="Tap the mic and start talking, or type your narrative here..."></textarea>
+      <div class="ta-wrap">
+        <textarea id="dictateText" class="dictate-textarea" placeholder="Tap the mic and start talking, or type your narrative here. Click anywhere in the text to move the dictation point."></textarea>
+        <div class="caret-mirror" id="dictateMirror" aria-hidden="true"></div>
+        <div class="caret-marker" id="dictateMarker"></div>
+      </div>
       <div class="dictate-actions">
         <button class="btn btn-primary" onclick="copyDictation()">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
@@ -2974,14 +3099,17 @@ function openDictation() {
         <div style="margin-left:auto"><button class="btn btn-secondary" onclick="exitDictation()">← Back to full form</button></div>
       </div>
     </div>`;
+  attachDictationSurface('dictateText', 'dictateMarker', 'dictateMirror');
 }
 
 function toggleDictation() {
   if (_dictListening) { stopDictation(); return; }
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SR) return;
-  const ta = document.getElementById('dictateText');
-  _dictFinal = ta.value ? ta.value.replace(/\s+$/, '') + ' ' : '';
+  if (!_dictTa || !document.body.contains(_dictTa)) return;
+  _dictBase = _dictTa.value;
+  _dictPos = Math.min(_dictPos, _dictBase.length);
+  _dictInterim = '';
   _dictRecog = new SR();
   _dictRecog.continuous = true;
   _dictRecog.interimResults = true;
@@ -2990,11 +3118,11 @@ function toggleDictation() {
     let interim = '';
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) _dictFinal += applyVoiceCommands(t) + ' ';
+      if (e.results[i].isFinal) _commitDictation(applyVoiceCommands(t));
       else interim += t;
     }
-    ta.value = cleanDictation(_dictFinal + interim);
-    ta.scrollTop = ta.scrollHeight;
+    _dictInterim = interim;
+    _renderDictation();
   };
   _dictRecog.onerror = (e) => {
     if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
@@ -3013,7 +3141,8 @@ function toggleDictation() {
     _dictRecog.start();
     _dictListening = true;
     setMicUI(true);
-    setMicStatus('Listening… speak now.');
+    setMicStatus('Listening… speak now. Click anywhere in the text to move the insertion line.');
+    _updateCaretMarker();
   } catch (err) {
     setMicStatus('Could not start the mic. Tap to try again.');
   }
@@ -3022,6 +3151,8 @@ function toggleDictation() {
 function stopDictation() {
   _dictListening = false;
   if (_dictRecog) { try { _dictRecog.stop(); } catch (_) {} }
+  _dictInterim = '';
+  if (_dictTa && document.body.contains(_dictTa)) _renderDictation();
   setMicUI(false);
 }
 
@@ -3030,6 +3161,7 @@ function setMicUI(on) {
   const label = document.getElementById('micLabel');
   if (btn) btn.classList.toggle('listening', on);
   if (label) label.textContent = on ? 'Stop dictating' : 'Start dictating';
+  if (_dictMarker) _dictMarker.classList.toggle('rec', on);
   if (!on) { const s = document.getElementById('micStatus'); if (s && s.textContent.startsWith('Listening')) s.textContent = 'Stopped. Tap the mic to continue.'; }
 }
 function setMicStatus(msg) {
@@ -3038,11 +3170,8 @@ function setMicStatus(msg) {
 }
 
 function applyVoiceCommands(t) {
-  // NOTE: every phrase handled here must be listed in the "Voice commands" key in openDictation()
+  // NOTE: every phrase handled here must be listed in the "Voice commands" key (voiceKeyHtml)
   return t.replace(/\bnext\s+line\b/gi, '\n');
-}
-function cleanDictation(t) {
-  return t.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/[ \t]{2,}/g, ' ');
 }
 
 function copyDictation() {
@@ -3056,7 +3185,26 @@ function copyDictation() {
 }
 function clearDictation() {
   const ta = document.getElementById('dictateText');
-  if (ta && (ta.value === '' || confirm('Clear the narrative?'))) { ta.value = ''; _dictFinal = ''; ta.focus(); }
+  if (ta && (ta.value === '' || confirm('Clear the narrative?'))) {
+    ta.value = ''; _dictBase = ''; _dictPos = 0; _dictInterim = '';
+    ta.focus(); _updateCaretMarker();
+  }
+}
+
+// Shared markup for the mic bar + voice-command key (both dictation surfaces)
+function _micBarHtml() {
+  return `<div class="mic-bar">
+    <button type="button" id="micBtn" class="mic-btn" onclick="toggleDictation()">
+      <span class="mic-pulse"></span>
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+      <span id="micLabel">Start dictating</span>
+    </button>
+    <span class="mic-status" id="micStatus"></span>
+  </div>
+  <div class="voice-key">
+    <span class="vk-title">Voice commands</span>
+    <span class="vk-item"><code>&ldquo;next line&rdquo;</code> &mdash; presses Enter (say it twice for a blank line)</span>
+  </div>`;
 }
 function exitDictation() {
   stopDictation();
