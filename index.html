@@ -508,6 +508,10 @@
   @keyframes micpulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
   .mic-status { font-size: 0.85rem; color: var(--gray-600); }
   .dictate-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .voice-key { background: var(--gray-50, #f8fafc); border: 1.5px solid var(--gray-200); border-radius: 9px; padding: 10px 14px; margin-bottom: 14px; display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap; }
+  .voice-key .vk-title { font-size: 0.7rem; font-weight: 800; text-transform: uppercase; letter-spacing: 0.08em; color: var(--gray-500); white-space: nowrap; }
+  .voice-key .vk-item { font-size: 0.84rem; color: var(--gray-600); }
+  .voice-key .vk-item code { background: #fff; border: 1px solid var(--gray-200); border-radius: 6px; padding: 2px 7px; font-size: 0.8rem; color: var(--blue); font-weight: 700; }
   .dictate-unsupported { background: #fff7ed; border: 1.5px solid #fdba74; color: #9a3412; border-radius: 9px; padding: 12px 14px; font-size: 0.85rem; margin-bottom: 16px; line-height: 1.5; }
 </style>
 </head>
@@ -2947,7 +2951,11 @@ function openDictation() {
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
           <span id="micLabel">Start dictating</span>
         </button>
-        <span class="mic-status" id="micStatus">Tip: say &ldquo;new paragraph&rdquo; to start a new paragraph.</span>
+        <span class="mic-status" id="micStatus"></span>
+      </div>
+      <div class="voice-key">
+        <span class="vk-title">Voice commands</span>
+        <span class="vk-item"><code>&ldquo;next line&rdquo;</code> &mdash; presses Enter (say it twice for a blank line)</span>
       </div>` : `
       <div class="dictate-unsupported">
         🎤 Voice dictation isn't supported in this browser. Try <strong>Chrome, Edge, or Safari</strong> — or just type your narrative below.
@@ -3030,9 +3038,8 @@ function setMicStatus(msg) {
 }
 
 function applyVoiceCommands(t) {
-  return t
-    .replace(/\bnew paragraph\b/gi, '\n\n')
-    .replace(/\bnew line\b/gi, '\n');
+  // NOTE: every phrase handled here must be listed in the "Voice commands" key in openDictation()
+  return t.replace(/\bnext\s+line\b/gi, '\n');
 }
 function cleanDictation(t) {
   return t.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/[ \t]{2,}/g, ' ');
