@@ -491,6 +491,24 @@
   .narrative-box p:last-child { margin-bottom: 0; }
   .copy-notice { font-size: 0.8rem; color: var(--green); font-weight: 600; display: none; align-items: center; gap: 5px; }
   .copy-notice.show { display: flex; }
+
+  /* Blank-narrative dictation feature */
+  .dictate-shortcut { margin-top: 16px; padding-top: 14px; border-top: 1px dashed var(--gray-200); text-align: center; }
+  .dictate-shortcut .or-label { display: block; font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em; color: var(--gray-500); margin-bottom: 9px; font-weight: 700; }
+  .btn-dictate-jump { display: inline-flex; align-items: center; gap: 9px; background: var(--green-pale); color: var(--green); border: 1.5px solid var(--green); border-radius: 9px; padding: 11px 18px; font-size: 0.9rem; font-weight: 700; cursor: pointer; transition: all .15s; line-height: 1.2; }
+  .btn-dictate-jump:hover { background: var(--green); color: #fff; }
+  .dictate-textarea { width: 100%; min-height: 340px; box-sizing: border-box; background: #fefefe; border: 1.5px solid var(--gray-200); border-radius: 10px; padding: 20px; font-size: 0.95rem; line-height: 1.7; color: var(--gray-900); font-family: 'Georgia', serif; resize: vertical; margin-bottom: 14px; }
+  .dictate-textarea:focus { outline: none; border-color: var(--blue); }
+  .mic-bar { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 16px; }
+  .mic-btn { display: inline-flex; align-items: center; gap: 9px; background: var(--blue); color: #fff; border: none; border-radius: 40px; padding: 12px 22px; font-size: 0.95rem; font-weight: 700; cursor: pointer; transition: all .15s; }
+  .mic-btn:hover { filter: brightness(1.06); }
+  .mic-btn.listening { background: var(--red); }
+  .mic-btn .mic-pulse { display: none; width: 10px; height: 10px; border-radius: 50%; background: #fff; }
+  .mic-btn.listening .mic-pulse { display: inline-block; animation: micpulse 1s infinite; }
+  @keyframes micpulse { 0%,100% { opacity: 1; transform: scale(1); } 50% { opacity: .3; transform: scale(.65); } }
+  .mic-status { font-size: 0.85rem; color: var(--gray-600); }
+  .dictate-actions { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .dictate-unsupported { background: #fff7ed; border: 1.5px solid #fdba74; color: #9a3412; border-radius: 9px; padding: 12px 14px; font-size: 0.85rem; margin-bottom: 16px; line-height: 1.5; }
 </style>
 </head>
 <body>
@@ -784,7 +802,7 @@ function renderProgressBar() {
   bar.innerHTML = STEPS.map((s, i) => {
     if (hidden.includes(s.id)) return '';
     let cls = '';
-    if (state.view === 'review' || state.view === 'narrative') cls = 'done';
+    if (state.view === 'review' || state.view === 'narrative' || state.view === 'dictate') cls = 'done';
     else if (i < state.current) cls = state.skipped[s.id] ? 'skipped' : 'done';
     else if (i === state.current) cls = 'active';
     const mark = cls === 'done' ? '✓' : (i + 1);
@@ -1262,6 +1280,13 @@ function renderStep(idx) {
         </button>
 <button class="btn-skip" onclick="skipStep(${idx})">Skip ↷</button>
       </div>
+      ${idx === 0 ? `<div class="dictate-shortcut">
+        <span class="or-label">or skip the whole form</span>
+        <button type="button" class="btn-dictate-jump" onclick="openDictation()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+          Go straight to a blank narrative &amp; dictate it
+        </button>
+      </div>` : ''}
     </div>`;
   // Show/hide Elder Gray alert button based on patient age
   updateElderGrayAlertVisibility();
@@ -2216,7 +2241,10 @@ function collectStep(idx) {
 }
 
 function goToStep(idx) {
-  if (state.view === 'review' || state.view === 'narrative') {
+  if (state.view === 'dictate') {
+    stopDictation();
+    state.view = 'steps';
+  } else if (state.view === 'review' || state.view === 'narrative') {
     state.view = 'steps';
   } else {
     state.data[STEPS[state.current].id] = collectStep(state.current);
@@ -2888,6 +2916,146 @@ function startOver() {
   if (!confirm('Start a new PCR? All current data will be cleared.')) return;
   state = { current: 0, data: {}, skipped: {}, view: 'steps' };
   renderProgressBar(); renderStep(0);
+}
+
+// ── Blank Narrative Dictation ─────────────────────────────────
+// Uses the browser's built-in Web Speech API (SpeechRecognition).
+// No API key, no backend — free, runs in the browser. Chrome/Edge/Safari.
+let _dictRecog = null, _dictListening = false, _dictFinal = '';
+
+function openDictation() {
+  stopDictation();
+  // Save whatever was typed on the current step before leaving the form
+  if (state.view === 'steps') {
+    state.data[STEPS[state.current].id] = collectStep(state.current);
+  }
+  state.view = 'dictate';
+  renderProgressBar();
+  const supported = !!(window.SpeechRecognition || window.webkitSpeechRecognition);
+  document.getElementById('stepContainer').innerHTML = `
+    <div class="card">
+      <div class="card-header">
+        <div class="step-icon" style="background:var(--green-pale);color:var(--green)">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+        </div>
+        <div><h2>Blank Narrative — Dictation</h2><p>Tap the mic and talk, or type directly. Then copy it into your report.</p></div>
+      </div>
+      ${supported ? `
+      <div class="mic-bar">
+        <button type="button" id="micBtn" class="mic-btn" onclick="toggleDictation()">
+          <span class="mic-pulse"></span>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 2a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/><path d="M19 10v1a7 7 0 0 1-14 0v-1"/><line x1="12" y1="18" x2="12" y2="22"/><line x1="8" y1="22" x2="16" y2="22"/></svg>
+          <span id="micLabel">Start dictating</span>
+        </button>
+        <span class="mic-status" id="micStatus">Tip: say &ldquo;new paragraph&rdquo; to start a new paragraph.</span>
+      </div>` : `
+      <div class="dictate-unsupported">
+        🎤 Voice dictation isn't supported in this browser. Try <strong>Chrome, Edge, or Safari</strong> — or just type your narrative below.
+      </div>`}
+      <textarea id="dictateText" class="dictate-textarea" placeholder="Tap the mic and start talking, or type your narrative here..."></textarea>
+      <div class="dictate-actions">
+        <button class="btn btn-primary" onclick="copyDictation()">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+          Copy to Clipboard
+        </button>
+        <span class="copy-notice" id="dictateCopyNotice">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+          Copied!
+        </span>
+        <button class="btn btn-secondary" onclick="clearDictation()">Clear</button>
+        <div style="margin-left:auto"><button class="btn btn-secondary" onclick="exitDictation()">← Back to full form</button></div>
+      </div>
+    </div>`;
+}
+
+function toggleDictation() {
+  if (_dictListening) { stopDictation(); return; }
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) return;
+  const ta = document.getElementById('dictateText');
+  _dictFinal = ta.value ? ta.value.replace(/\s+$/, '') + ' ' : '';
+  _dictRecog = new SR();
+  _dictRecog.continuous = true;
+  _dictRecog.interimResults = true;
+  _dictRecog.lang = 'en-US';
+  _dictRecog.onresult = (e) => {
+    let interim = '';
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) _dictFinal += applyVoiceCommands(t) + ' ';
+      else interim += t;
+    }
+    ta.value = cleanDictation(_dictFinal + interim);
+    ta.scrollTop = ta.scrollHeight;
+  };
+  _dictRecog.onerror = (e) => {
+    if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
+      setMicStatus('Microphone blocked — allow mic access in your browser, then tap the mic again.');
+      stopDictation();
+    } else if (e.error === 'no-speech') {
+      setMicStatus('Didn\'t catch that — keep talking.');
+    } else if (e.error === 'aborted') {
+      /* normal on stop */
+    } else {
+      setMicStatus('Mic error: ' + e.error);
+    }
+  };
+  _dictRecog.onend = () => { if (_dictListening) { try { _dictRecog.start(); } catch (_) {} } };
+  try {
+    _dictRecog.start();
+    _dictListening = true;
+    setMicUI(true);
+    setMicStatus('Listening… speak now.');
+  } catch (err) {
+    setMicStatus('Could not start the mic. Tap to try again.');
+  }
+}
+
+function stopDictation() {
+  _dictListening = false;
+  if (_dictRecog) { try { _dictRecog.stop(); } catch (_) {} }
+  setMicUI(false);
+}
+
+function setMicUI(on) {
+  const btn = document.getElementById('micBtn');
+  const label = document.getElementById('micLabel');
+  if (btn) btn.classList.toggle('listening', on);
+  if (label) label.textContent = on ? 'Stop dictating' : 'Start dictating';
+  if (!on) { const s = document.getElementById('micStatus'); if (s && s.textContent.startsWith('Listening')) s.textContent = 'Stopped. Tap the mic to continue.'; }
+}
+function setMicStatus(msg) {
+  const s = document.getElementById('micStatus');
+  if (s) s.textContent = msg;
+}
+
+function applyVoiceCommands(t) {
+  return t
+    .replace(/\bnew paragraph\b/gi, '\n\n')
+    .replace(/\bnew line\b/gi, '\n');
+}
+function cleanDictation(t) {
+  return t.replace(/[ \t]+\n/g, '\n').replace(/\n[ \t]+/g, '\n').replace(/[ \t]{2,}/g, ' ');
+}
+
+function copyDictation() {
+  const ta = document.getElementById('dictateText');
+  const text = ta ? ta.value : '';
+  const notice = document.getElementById('dictateCopyNotice');
+  const show = () => { if (notice) { notice.classList.add('show'); setTimeout(() => notice.classList.remove('show'), 2500); } };
+  navigator.clipboard.writeText(text).then(show).catch(() => {
+    if (ta) { ta.select(); document.execCommand('copy'); show(); }
+  });
+}
+function clearDictation() {
+  const ta = document.getElementById('dictateText');
+  if (ta && (ta.value === '' || confirm('Clear the narrative?'))) { ta.value = ''; _dictFinal = ''; ta.focus(); }
+}
+function exitDictation() {
+  stopDictation();
+  state.view = 'steps';
+  renderProgressBar();
+  renderStep(0);
 }
 
 // ── Fill Example ──────────────────────────────────────────────
