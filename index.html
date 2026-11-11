@@ -596,7 +596,7 @@ const STEPS = [
 
       { id: 'assessment_type', label: 'Assessment Type', type: 'select', default: 'Focused assessment', options: ['Head to toe','Focused assessment'] },
       { id: 'assessment_ok', label: 'Assessment Notes', type: 'thumbs', bar: 'blue', required: true },
-      { id: 'assessment_notes', label: 'Findings', type: 'textarea', placeholder: 'Leave blank for default: "did not reveal any DCAP-BTLS"', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
+      { id: 'assessment_notes', label: 'Findings', type: 'textarea', placeholder: 'Leave blank for default: "did not reveal any DCAP BTLS"', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'assessment_interventions', label: 'Interventions', type: 'textarea', placeholder: 'e.g. O2 via NRB at 15 LPM; cardiac monitor applied', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'assessment_pt_response', label: 'Patient Response', type: 'pt_response', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'alerts', label: 'Medical Alerts', type: 'alert_panel', opt: true },
@@ -651,7 +651,7 @@ const STEPS = [
       { id: 'extra_vitals_list', type: 'extra_vitals' },
       { id: 'assessment_type', label: 'Assessment Type', type: 'select', default: 'Head to toe', options: ['Head to toe','Focused assessment'] },
       { id: 'assessment_ok', label: 'Assessment Notes', type: 'thumbs', bar: 'blue', required: true },
-      { id: 'assessment_notes', label: 'Findings', type: 'textarea', placeholder: 'Leave blank for default: "did not reveal any DCAP-BTLS"', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
+      { id: 'assessment_notes', label: 'Findings', type: 'textarea', placeholder: 'Leave blank for default: "did not reveal any DCAP BTLS"', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'assessment_interventions', label: 'En Route Interventions', type: 'textarea', placeholder: 'e.g. Additional treatments administered en route...', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'assessment_pt_response', label: 'Patient Response', type: 'pt_response', opt: true, showWhen: { field: 'assessment_ok', value: 'down' } },
       { id: 'reassessment', label: 'Additional Notes', type: 'textarea', placeholder: 'e.g. No change in condition en route', opt: true },
@@ -2401,6 +2401,38 @@ function dot(text) {
   return text ? text + '.' : '';
 }
 
+// Picklist values that need rewording to read naturally once the dashes are gone
+const SAY_PHRASES = {
+  'Unequal — left larger':  'unequal with the left larger',
+  'Unequal — right larger': 'unequal with the right larger',
+  'LBBB — STEMI equivalent (Sgarbossa criteria)': 'LBBB with STEMI equivalent (Sgarbossa criteria)',
+  'ST elevation — anterior (V1–V4)':             'anterior ST elevation (V1 to V4)',
+  'ST elevation — anterolateral (I, aVL, V1–V6)': 'anterolateral ST elevation (I, aVL, V1 to V6)',
+  'ST elevation — inferior (II, III, aVF)':      'inferior ST elevation (II, III, aVF)',
+  'ST elevation — lateral (I, aVL, V5–V6)':      'lateral ST elevation (I, aVL, V5 to V6)',
+  'ST elevation — posterior pattern':            'posterior ST elevation pattern',
+  'Non-reactive bilaterally': 'nonreactive bilaterally',
+  '< 3 hours ago':   'less than 3 hours ago',
+  '3–4.5 hours ago': '3 to 4.5 hours ago',
+  '> 4.5 hours ago': 'more than 4.5 hours ago',
+};
+const SAY_NAMES = /^(Brugada|Wellens|Mobitz|Wolff|Parkinson|White|Sgarbossa|Winter)$/;
+
+// Turn a picklist value into narrative wording: no dashes, lowercase except acronyms and names
+function say(text) {
+  if (!text) return '';
+  return (SAY_PHRASES[text] || text)
+    .replace(/\s*—\s*/g, ', ')
+    .replace(/(\w)–(\w)/g, '$1 to $2')
+    .replace(/(\w)-(\w)/g, '$1 $2')
+    .replace(/\b[A-Z][a-z]+\b/g, w => SAY_NAMES.test(w) ? w : w.toLowerCase());
+}
+
+// "a", "a and b", "a, b and c"
+function listJoin(arr) {
+  return arr.length > 1 ? arr.slice(0, -1).join(', ') + ' and ' + arr[arr.length - 1] : (arr[0] || '');
+}
+
 // Expand "55f", "47m", "55 y/o M", "55 YOM", "55 YO F" etc. → "55 year old male/female"
 function normalizePatient(raw) {
   if (!raw) return raw;
@@ -2426,7 +2458,7 @@ function vitalsStr(stepId) {
     v(stepId,'hr')   && `HR ${v(stepId,'hr')}`,
     v(stepId,'bp')   && `BP ${v(stepId,'bp')}`,
     v(stepId,'rr')   && `RR ${v(stepId,'rr')}`,
-    v(stepId,'spo2') && `SpO₂ ${v(stepId,'spo2')}%`,
+    v(stepId,'spo2') && `SpO2 ${v(stepId,'spo2')}%`,
     v(stepId,'bgl')  && `BGL ${v(stepId,'bgl')}`,
     v(stepId,'temp') && `temp ${v(stepId,'temp')}°`,
   ].filter(Boolean);
@@ -2510,15 +2542,15 @@ function generateNarrative() {
     const vitalsPR   = v('primary_assessment','vitals_pt_response');
     const vitalParts = [
       vStr,
-      lungSounds && `lung sounds ${lungSounds.toLowerCase()}`,
-      ekgRhythm  && `4 lead EKG ${ekgRhythm.toLowerCase()}`,
-      ekg12Lead  && `12 lead EKG ${ekg12Lead.toLowerCase()}`,
+      lungSounds && `lung sounds ${say(lungSounds)}`,
+      ekgRhythm  && `4 lead EKG ${say(ekgRhythm)}`,
+      ekg12Lead  && `12 lead EKG ${say(ekg12Lead)}`,
       painScale  && `pain ${painScale}`,
-      pupilsVal  && `pupils ${pupilsVal.toLowerCase()}`,
+      pupilsVal  && `pupils ${say(pupilsVal)}`,
     ].filter(Boolean);
     sentences.push(vitalParts.length
       ? dot(`Vital signs were assessed which revealed ${vitalParts.join(', ')}`)
-      : 'Vital signs were assessed without life-threatening abnormalities.');
+      : 'Vital signs were assessed without life threatening abnormalities.');
     if (!v('primary_assessment','bgl') && bglDone === 'yes') sentences.push('Blood glucose was taken.');
     if (!ekgRhythm && ekgDone === 'yes') sentences.push('4 Lead EKG was taken.');
     if (!ekg12Lead && ekg12Done === 'yes') sentences.push('12 Lead EKG was taken.');
@@ -2554,7 +2586,7 @@ function generateNarrative() {
     const assPR    = v('primary_assessment','assessment_pt_response');
     sentences.push(assNotes
       ? dot(`A ${assType.toLowerCase()} was performed which revealed ${assNotes}`)
-      : dot(`A ${assType.toLowerCase()} was performed which did not reveal any DCAP-BTLS`));
+      : dot(`A ${assType.toLowerCase()} was performed which did not reveal any DCAP BTLS`));
     if (assRx) sentences.push(dot(assRx));
     if (assPR) sentences.push(dot(assPR));
 
@@ -2567,20 +2599,18 @@ function generateNarrative() {
       const scaleResults = [];
       if (scales.includes('fast-ed')) {
         const normals = { fe_face:'Normal', fe_arm:'No drift', fe_speech:'Normal', fe_time:'Unknown', fe_eyes:'None', fe_denial:'Absent' };
-        const labels  = { fe_face:'facial droop', fe_arm:'arm strength', fe_speech:'speech', fe_time:'last known well', fe_eyes:'eyes deviation', fe_denial:'denial/neglect' };
         const abn = Object.keys(normals).filter(k => sk[k] && sk[k] !== normals[k]);
-        const parts = abn.map(k => `${labels[k]}: ${sk[k]}`);
-        scaleResults.push(parts.length ? `FAST-ED revealed ${parts.join('; ')}` : 'FAST-ED within normal limits');
+        const parts = abn.map(k => k === 'fe_time' ? `last known well ${say(sk[k])}` : say(sk[k]));
+        scaleResults.push(parts.length ? `FAST ED revealed ${listJoin(parts)}` : 'FAST ED was within normal limits');
       }
       if (scales.includes('cincinnati')) {
         const normals = { ci_face:'Normal', ci_arm:'No drift', ci_speech:'Normal' };
-        const labels  = { ci_face:'facial droop', ci_arm:'arm drift', ci_speech:'speech' };
         const abn = Object.keys(normals).filter(k => sk[k] && sk[k] !== normals[k]);
-        const parts = abn.map(k => `${labels[k]}: ${sk[k]}`);
-        scaleResults.push(parts.length ? `Cincinnati revealed ${parts.join('; ')}` : 'Cincinnati within normal limits');
+        const parts = abn.map(k => say(sk[k]));
+        scaleResults.push(parts.length ? `Cincinnati revealed ${listJoin(parts)}` : 'Cincinnati was within normal limits');
       }
       const alertCalled = sk.alert_called === 'yes' ? ' A stroke alert was activated.' : sk.alert_called === 'no' ? ' Stroke alert was not called.' : '';
-      sentences.push(dot(`Stroke assessment performed — ${scaleResults.join('; ')}`) + alertCalled);
+      sentences.push(['A stroke assessment was performed.', ...scaleResults.map(dot)].join(' ') + alertCalled);
     }
     if (alertData.trauma?.active) {
       sentences.push('A trauma alert was activated.');
@@ -2608,9 +2638,9 @@ function generateNarrative() {
           const pcsDetails = PED_TRAUMA.pcs.map(cat => {
             if (!pc[cat.id]) return null;
             const opt = cat.opts.find(o => String(o.v) === String(pc[cat.id]));
-            return opt ? `${cat.label.toLowerCase()}: ${opt.t.toLowerCase()} (${opt.v})` : null;
+            return opt ? `${cat.label.toLowerCase()} ${opt.t.toLowerCase()} (${opt.v})` : null;
           }).filter(Boolean);
-          sentences.push(dot(`Pediatric Coma Scale (PCS) score ${pcsTotal}/15 — ${pcsDetails.join('; ')}`));
+          sentences.push(dot(`Pediatric Coma Scale (PCS) score of ${pcsTotal}/15: ${pcsDetails.join(', ')}`));
         }
       }
       if (tc.trauma_type === 'adult' && tc.adult_criteria) {
@@ -2635,15 +2665,15 @@ function generateNarrative() {
           const gcsDetails = ADULT_TRAUMA.gcs.map(cat => {
             if (!ac[cat.id]) return null;
             const opt = cat.opts.find(o => String(o.v) === String(ac[cat.id]));
-            return opt ? `${cat.label.replace(/\n/g,' ').toLowerCase()}: ${opt.t.toLowerCase()} (${opt.v})` : null;
+            return opt ? `${cat.label.replace(/\n/g,' ').toLowerCase()} ${opt.t.toLowerCase()} (${opt.v})` : null;
           }).filter(Boolean);
-          sentences.push(dot(`Glasgow Coma Scale (GCS) score ${gcsRaw}/15 — ${gcsDetails.join('; ')}`));
+          sentences.push(dot(`Glasgow Coma Scale (GCS) score of ${gcsRaw}/15: ${gcsDetails.join(', ')}`));
         }
       }
     }
     if (alertData.sepsis?.active) {
       const parts = [];
-      if (alertData.sepsis.etco2) parts.push(`ETCO₂ ${alertData.sepsis.etco2} mmHg`);
+      if (alertData.sepsis.etco2) parts.push(`ETCO2 ${alertData.sepsis.etco2} mmHg`);
       if (alertData.sepsis.temp)  parts.push(`temp ${alertData.sepsis.temp}°`);
       if (alertData.sepsis.hr)    parts.push(`HR ${alertData.sepsis.hr}`);
       if (alertData.sepsis.rr)    parts.push(`RR ${alertData.sepsis.rr}`);
@@ -2683,9 +2713,9 @@ function generateNarrative() {
     if (isTransported && stretcher) {
       sentences.push(
         stretcher.toLowerCase() === 'self-ambulatory'
-          ? `The patient was able to self-ambulate to the stretcher without incident, secured with 2 straps, and moved to the back of the rescue.`
+          ? `The patient was able to self ambulate to the stretcher without incident, secured with 2 straps, and moved to the back of the rescue.`
           : stretcher.toLowerCase() === 'walk-assisted'
-          ? `The patient was walk-assisted to the stretcher without incident, secured with 2 straps, and moved to the back of the rescue.`
+          ? `The patient walked to the stretcher with assistance and without incident, secured with 2 straps, and moved to the back of the rescue.`
           : `The patient was moved to the stretcher via ${stretcher.toLowerCase()} without incident, secured with 2 straps, and moved to the back of the rescue.`
       );
     }
@@ -2715,7 +2745,7 @@ function generateNarrative() {
     if (abcs2Ok === 'down' && abcs2Notes) {
       sentences.push(dot(`ABCs reassessment revealed ${abcs2Notes}`));
     } else {
-      sentences.push('ABCs remained without life-threatening findings.');
+      sentences.push('ABCs remained without life threatening findings.');
     }
     if (abcs2Rx) sentences.push(dot(abcs2Rx));
     if (abcs2PR) sentences.push(dot(abcs2PR));
@@ -2734,11 +2764,11 @@ function generateNarrative() {
     const vitals2PR   = v('secondary_assessment','vitals_pt_response');
     const vitalParts2 = [
       vStr2,
-      lungSounds2 && `lung sounds ${lungSounds2.toLowerCase()}`,
-      ekgRhythm2  && `4 lead EKG ${ekgRhythm2.toLowerCase()}`,
-      ekg12Lead2  && `12 lead EKG ${ekg12Lead2.toLowerCase()}`,
+      lungSounds2 && `lung sounds ${say(lungSounds2)}`,
+      ekgRhythm2  && `4 lead EKG ${say(ekgRhythm2)}`,
+      ekg12Lead2  && `12 lead EKG ${say(ekg12Lead2)}`,
       painScale2  && `pain ${painScale2}`,
-      pupilsVal2  && `pupils ${pupilsVal2.toLowerCase()}`,
+      pupilsVal2  && `pupils ${say(pupilsVal2)}`,
     ].filter(Boolean);
     sentences.push(vitalParts2.length
       ? dot(`Repeat vital signs were assessed which revealed ${vitalParts2.join(', ')}`)
@@ -2756,14 +2786,14 @@ function generateNarrative() {
         ev.hr     && `HR ${ev.hr}`,
         ev.bp     && `BP ${ev.bp}`,
         ev.rr     && `RR ${ev.rr}`,
-        ev.spo2   && `SpO₂ ${ev.spo2}%`,
+        ev.spo2   && `SpO2 ${ev.spo2}%`,
         ev.bgl    && `BGL ${ev.bgl}`,
         ev.temp   && `temp ${ev.temp}°`,
-        ev.lung_sounds && `lung sounds ${ev.lung_sounds.toLowerCase()}`,
-        ev.ekg         && `4 lead EKG ${ev.ekg.toLowerCase()}`,
-        ev.ekg_12lead  && `12 lead EKG ${ev.ekg_12lead.toLowerCase()}`,
+        ev.lung_sounds && `lung sounds ${say(ev.lung_sounds)}`,
+        ev.ekg         && `4 lead EKG ${say(ev.ekg)}`,
+        ev.ekg_12lead  && `12 lead EKG ${say(ev.ekg_12lead)}`,
         ev.pain   && `pain ${ev.pain}`,
-        ev.pupils && `pupils ${ev.pupils.toLowerCase()}`,
+        ev.pupils && `pupils ${say(ev.pupils)}`,
       ].filter(Boolean);
       if (evParts.length) sentences.push(dot(`Repeat vital signs were assessed which revealed ${evParts.join(', ')}`));
       if (ev.interventions) sentences.push(dot(ev.interventions.replace(/\.+$/, '')));
@@ -2834,7 +2864,7 @@ function generateNarrative() {
     if (position) {
       const posPhrase = {
         'Supine':                 'in the supine position',
-        "Semi-Fowler's":          "in the Semi-Fowler's position",
+        "Semi-Fowler's":          "in the semi Fowler's position",
         'Position of comfort':    'in a position of comfort',
         'Left lateral recumbent': 'in the left lateral recumbent position',
         'Trendelenburg':          'in the Trendelenburg position',
